@@ -1,35 +1,56 @@
 # Cron Schedule
 
-Operational schedule for the main Furina automation jobs.
+This page explains how often each Furina automation job runs. It uses a table first because it is easier to read than a dense timeline.
+
+## Human-readable Schedule
+
+| Workflow | Purpose | Typical cadence |
+| --- | --- | --- |
+| Large Prints | Detect unusually large Binance spot/perp trades | Every 1 minute |
+| Position Monitor | Watch active entries, TP, SL, and BE events | Every 5 minutes |
+| Risk Manager | Watch drawdown and account risk | Every 5 minutes |
+| Funding Alert | Alert if perp funding is above +1% or below -1% | Every 5 minutes |
+| Aggressive Scanner | Fast setups on lower timeframes | Every 15 minutes |
+| Smart Money Move | Detect smart wallet accumulation | Every 15 minutes |
+| Market-cap Move Alert | Detect large 4H/1D market-cap moves | Every 15 minutes |
+| Medium Scanner | Cleaner 1H/4H setups | Every 30 minutes |
+| Volume Breakout | Detect large 1H volume breakouts | Every 30 minutes |
+| Safe Scanner | Slower 4H/1D setups | Every 2 hours |
+| Daily Report | Summarize signal and trade status | 07:00 |
+| Session Overviews | Asia, Europe, and US market summaries | 09:00, 16:00, 22:00 |
+
+## Grouped Diagram
 
 ```mermaid
-gantt
-    title Furina Automation Cadence
-    dateFormat HH:mm
-    axisFormat %H:%M
+flowchart TD
+    subgraph Fast[Fast checks]
+        A[Large Prints<br/>Every 1m]
+        B[Position Monitor<br/>Every 5m]
+        C[Risk Manager<br/>Every 5m]
+        D[Funding Alert<br/>Every 5m]
+    end
 
-    section High-frequency monitoring
-    Large prints scanner          :lp, 00:00, 24h
-    Position and TP/SL monitor    :mon, 00:00, 24h
-    Funding extreme alert         :fund, 00:00, 24h
-    Risk manager and reconciler   :risk, 00:00, 24h
+    subgraph Scanners[Signal and market scanners]
+        E[Aggressive Scanner<br/>Every 15m]
+        F[Smart Money Move<br/>Every 15m]
+        G[Market-cap Move<br/>Every 15m]
+        H[Medium Scanner<br/>Every 30m]
+        I[Volume Breakout<br/>Every 30m]
+        J[Safe Scanner<br/>Every 2h]
+    end
 
-    section Signal scanners
-    Aggressive scanner 15m        :aggr, 00:00, 24h
-    Medium scanner 30m            :med, 00:05, 24h
-    Safe scanner 2h               :safe, 00:10, 24h
-    Binance Alpha scanner 15m     :alpha, 00:00, 24h
+    subgraph Reports[Scheduled reports]
+        K[Daily Report<br/>07:00]
+        L[Asia Overview<br/>09:00]
+        M[Europe Overview<br/>16:00]
+        N[US Overview<br/>22:00]
+    end
 
-    section Market intelligence
-    Smart Money Move 15m          :smart, 00:00, 24h
-    Market-cap move alert 15m     :mcap, 00:00, 24h
-    Volume breakout alert 30m     :vol, 00:00, 24h
-
-    section Scheduled reports
-    Daily signal report           :milestone, daily, 07:00, 0m
-    Asia session overview         :milestone, asia, 09:00, 0m
-    Europe session overview       :milestone, eu, 16:00, 0m
-    US session overview           :milestone, us, 22:00, 0m
+    Fast --> O[Telegram alerts]
+    Scanners --> O
+    Reports --> O
 ```
 
-Note: this is a conceptual cadence diagram. Exact cron expressions can differ between deployments and should be checked in the live Hermes cron registry.
+## Note
+
+Exact cron expressions can differ between deployments. Use the live Hermes cron registry as the source of truth when operating the bot.

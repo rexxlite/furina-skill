@@ -1,29 +1,53 @@
 # Smart Money Move Flow
 
-Pipeline used by the Smart Money Move topic to turn on-chain wallet activity into concise alerts.
+This diagram explains how Furina turns wallet activity into a Smart Money Move alert.
+
+## Simple Overview
 
 ```mermaid
-flowchart LR
-    Start([Cron tick]) --> Traders[Fetch top traders from Birdeye]
-    Traders --> WalletTx[Fetch recent wallet swaps]
-    WalletTx --> BuyFilter{Received risk token and sent stable or native?}
-    BuyFilter -- No --> Drop1[Drop transaction]
-    BuyFilter -- Yes --> NoiseFilter{Stable, wrapped, LST, or yield token?}
-    NoiseFilter -- Yes --> Drop2[Drop token]
-    NoiseFilter -- No --> MinBuy{Buy size above threshold?}
-    MinBuy -- No --> Drop3[Ignore small buy]
-    MinBuy -- Yes --> Record[(Record recent buy)]
-
-    Record --> Aggregate[Aggregate by token and distinct wallet]
-    Aggregate --> Threshold{Wallet and USD threshold met?}
-    Threshold -- No --> Silent[Stay silent]
-    Threshold -- Yes --> GMGN[GMGN validation layer]
-
-    GMGN --> Validate[Check trending, smart-money tape, security, liquidity, holders]
-    Validate --> Cooldown{Token in cooldown?}
-    Cooldown -- Yes --> Silent
-    Cooldown -- No --> Alert[Send Telegram alert]
-    Alert --> Mark[(Mark cooldown)]
+flowchart TD
+    A[1. Find profitable wallets] --> B[2. Read their recent buys]
+    B --> C[3. Remove noise tokens]
+    C --> D[4. Group buys by token]
+    D --> E[5. Validate token with GMGN]
+    E --> F{6. Alert worthy?}
+    F -- No --> G[Stay silent]
+    F -- Yes --> H[Send Smart Money Move alert]
 ```
 
-The goal is early discovery, not automatic execution. GMGN is used as an extra validation layer on top of Birdeye discovery.
+## Detailed Filter Flow
+
+```mermaid
+flowchart TD
+    Start[Start every 15 minutes] --> Birdeye[Fetch Birdeye top traders]
+    Birdeye --> Swaps[Fetch wallet swap history]
+    Swaps --> BuyCheck{Is this a real buy?}
+
+    BuyCheck -- No --> IgnoreTx[Ignore transaction]
+    BuyCheck -- Yes --> NoiseCheck{Is token noise?}
+
+    NoiseCheck -- Yes --> IgnoreToken[Ignore stable, wrapped, LST, or yield token]
+    NoiseCheck -- No --> SizeCheck{Buy size large enough?}
+
+    SizeCheck -- No --> IgnoreSmall[Ignore small buy]
+    SizeCheck -- Yes --> Store[Store buy in local database]
+
+    Store --> Aggregate[Group by token and count wallets]
+    Aggregate --> Threshold{Meets wallet and USD threshold?}
+
+    Threshold -- No --> Silent[No alert]
+    Threshold -- Yes --> GMGN[Check GMGN data]
+
+    GMGN --> Confirm[Trending, smart-money tape, security, liquidity, holders]
+    Confirm --> Cooldown{Already alerted recently?}
+
+    Cooldown -- Yes --> Silent
+    Cooldown -- No --> Alert[Send Telegram alert]
+```
+
+## What GMGN Adds
+
+- Confirms whether the token is trending.
+- Checks smart-money buy tape from another source.
+- Adds basic token safety and liquidity context.
+- Helps reduce low-quality Birdeye-only alerts.
