@@ -5,9 +5,17 @@ Personal collection of Hermes Agent skills and automation scripts used by Furina
 ## Layout
 
 ```
-skills/      # Hermes skill modules (SKILL.md + linked references/scripts/templates)
-scripts/     # Standalone Python scripts wired to Hermes cron jobs
+skills/          # Hermes skill modules (SKILL.md + linked references/scripts/templates)
+scripts/         # Standalone Python scripts wired to Hermes cron jobs
+docs/diagrams/  # Mermaid diagrams that explain Furina's automation flows
 ```
+
+## Diagrams
+
+- [System Architecture](docs/diagrams/system-architecture.md) — high-level map of skills, scripts, data sources, and outputs
+- [Signal Lifecycle](docs/diagrams/signal-lifecycle.md) — state machine from setup detection to TP/SL/reporting
+- [Smart Money Move Flow](docs/diagrams/smart-money-flow.md) — Birdeye discovery plus GMGN validation pipeline
+- [Cron Schedule](docs/diagrams/cron-schedule.md) — conceptual cadence for scanners, monitors, alerts, and reports
 
 ### Skills
 
