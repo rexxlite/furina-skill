@@ -82,11 +82,29 @@ when a relevant task comes up. Highlights in this repo:
 
 Standalone scripts that back automated cron jobs (mostly trading automation):
 
-- `automatic_signal_scanner.py` — multi-scanner market scan across timeframes
-  and statistical edges; writes signals to the journal when confirmations pass.
-- `automatic_signal_monitor.py` — monitors open signals and notifies on entry,
-  TP, SL, and breakeven events (cross-references the real journal to avoid
-  ghost-trade false notifications).
+**Trend-following scanners:**
+- `automatic_signal_scanner.py` — multi-mode market scan (aggressive / medium /
+  safe / counter-trend) across timeframes; writes signals to the journal when
+  confirmations pass.
+- `binance_alpha_signal_scanner.py` — scans Binance Alpha tokens every 15m and
+  emits a signal when setup filters pass.
+
+**Statistical-edge scanners (trial, 2026-06-13):**
+- `oi_divergence_scanner.py` — Open Interest divergence on 15m; OI shifts hard
+  while price lags = squeeze setup. ACTIVE, tuned 2026-06-29 (BTC bias gate).
+- `funding_extreme_scanner.py` — Funding rate contrarian on 1h; fades crowded
+  longs/shorts at exhaustion. ACTIVE.
+- `liq_cascade_scanner.py` — Liquidation cascade reversal scalp on 5m; catches
+  the bounce after a forced-flow wipeout. ACTIVE.
+- `breakout_retest_scanner.py` — BB squeeze → breakout → retest entry on 1h.
+  REMOVED from cron (net -$85 / 43% WR in 2-week eval); script kept for reference.
+- `range_mr_scanner.py` — Range mean-reversion on 1h (ADX < 20 regime gate, BB
+  band fades). REMOVED from cron (net -$137 / 30% WR); script kept for reference.
+
+See `skills/finance/furina-trading-agent/references/scanner-*.md` for per-scanner
+documentation (thesis, parameters, scoring, tuning history, performance).
+
+**Monitoring & reporting:**
 - `automatic_signal_daily_report.py` — daily signal and trade status report.
 - `automatic_signal_risk_manager.py` — watches drawdown and account risk;
   auto-pauses on daily drawdown breach and auto-kills on catastrophic drawdown.
