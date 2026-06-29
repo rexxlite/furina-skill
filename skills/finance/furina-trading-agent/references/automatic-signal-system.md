@@ -9,32 +9,144 @@ Use this pattern when the user wants automated crypto trading signals delivered 
 - Use Binance USDⓈ-M Futures API (`https://fapi.binance.com`) for perpetual symbols, klines, 24h quote volume, funding/premium, and OI where needed.
 - Keep LLM analysis for explaining shortlisted setups or evolving the strategy, not for scanning hundreds of pairs every 15 minutes.
 
-## Scanner risk profiles
+## Scanner risk profiles (multi-mode)
 
-### Conservative criteria
+The scanner is parameterized by `--mode {aggressive|medium|safe}` and the same script handles all three. Each mode has a `MODES[mode]` dict with TF chain, indicator gates, score threshold, RR floor, max risk, TP multiples, volume floor, cooldown, and label/icon. The journal records the actual `risk_model` per signal so reports can split per mode.
 
-- Universe: liquid Binance USDT perpetual symbols, excluding stable/stable pairs.
-- Timeframes: scalping 5m/15m plus intraday 1h context.
-- Trend/structure: 15m and 1h EMA 20/50 alignment, breakout/breakdown or retest near recent structure.
-- Momentum: RSI not extremely overextended.
-- Volume: current 15m quote volume meaningfully above recent average.
-- Risk: structural SL, no chase after oversized candle, RR to TP2 >= 1.5R.
-- Cooldown per symbol to avoid repeated duplicate signals.
+### ⚡ Aggressive
 
-### Aggressive criteria
+- TF chain: `15m → 30m → 1h` (first match wins), context TF `1h`
+- Indicators: EMA20/50, RSI14, ATR14, volume ratio, structure (breakout/breakdown-retest), close_pos
+- Score threshold: ≥ 6/7. Volume floor 24h: $8M. Volume ratio min: 1.25×.
+- RSI gates: LONG 45–78, SHORT 22–55. BTC bias: soft (block only if extreme opposite).
+- TP multiples: 1.0R / 1.8R / 2.6R. Min RR to TP2: 1.5. Max risk: 3.5%. Cooldown: 8h.
+- Cron: `*/15 * * * *`.
+- Use this mode for momentum scalping. Many signals/day, more invalidations expected.
 
-Use when the user explicitly asks for aggressive signals or wants more frequent generated signals:
+### 🔹 Medium
 
-- Expand the universe (lower 24h quote-volume threshold and scan more symbols).
-- Shorten cooldown per symbol so fresh setups can recur sooner.
-- Allow 15m trend/momentum setups when 1h is not strongly opposing, rather than requiring strict 15m+1h EMA alignment.
-- Lower volume confirmation threshold while still requiring some volume/structure evidence.
-- Allow wider ATR/risk range, but still reject structurally invalid RR or extreme chase candles.
-- Label the signal as `AGGRESSIVE` in the Telegram title and journal row.
+- TF chain: `1h → 4h`, context TF `4h`
+- Adds: **ADX(14) ≥ 20** (Wilder's), **MACD histogram aligned** (bullish & rising for LONG; bearish & falling for SHORT)
+- Score threshold: ≥ 7/9. Volume floor 24h: $20M. Volume ratio min: 1.4×.
+- RSI gates: LONG 50–72, SHORT 28–50. BTC bias: hard gate (no LONG vs bearish BTC, no SHORT vs bullish BTC).
+- TP multiples: 1.0R / 2.0R / 3.2R. Min RR to TP2: 2.0. Max risk: 2.5%. Cooldown: 16h.
+- Cron: `5,35 * * * *` (offset to avoid overlapping with the aggressive scanner's `*/15` runs).
+- Use this mode for swing setups. 2–6 signals/day in normal markets.
+
+### 🛡️ Safe
+
+- TF chain: `4h → 1D`, context TF `1D`
+- Adds: **multi-TF EMA alignment** (15m + 1h + 4h must all be aligned the same direction), **ADX ≥ 25**, **BB width sanity** (reject squeeze < 2% and exhaustion > 18%)
+- Score threshold: ≥ 8/12. Volume floor 24h: $40M. Volume ratio min: 1.3×.
+- RSI gates: LONG 50–65, SHORT 35–50. BTC bias: hard gate on **both 1H and 1D** (the daily bias must also not contradict).
+- TP multiples: 1.0R / 2.5R / 4.0R. Min RR to TP2: 2.5. Max risk: 1.5%. Cooldown: 24h.
+- Cron: `10 */2 * * *` (every 2h, minute 10 — multi-TF data fetch is heavy).
+- Use this mode for position trades. 0–2 signals/day, sometimes zero for days in choppy markets. **Do not loosen filters when SAFE goes silent**; silence is the design.
+
+### 🔄 Counter-Trend (added 2026-06-05)
+
+- TF chain: `1h → 4h`, context TF `4h`
+- **LONG-only** — no shorts. Designed to catch oversold bounces during market crashes.
+- **Ignores BTC bias** — explicitly allows LONG when BTC is bearish (the whole point is counter-trend)
+- **Oversold gate**: requires RSI < 30 + (BB %B < 0.15 OR volume spike ≥ 1.5×)
+- **Scoring**: RSI deeply oversold (<15) +3, RSI oversold (<22) +2, BB below lower band +2, bullish divergence +2, crash condition +1, MACD turning up +1, context TF oversold +1
+- Score threshold: ≥ 6/10. Volume floor 24h: $15M. Volume ratio min: 1.5×.
+- **BB width check disabled** (`use_bb_width: False`) — crash conditions produce BBW > 18% which blocks signals. Uses `bb_pct_b()` instead.
+- TP multiples: 0.8R / 1.5R / 2.2R (quick profit taking — bounce trades)
+- Max risk: 3.0%. Cooldown: 6h.
+- Entry: tight zone near current price (±0.05-0.15×ATR), SL below recent low (0.5×ATR below entry)
+- Cron: `9,24,39,54 * * * *` (offset from other scanners)
+- Wrapper: `automatic_signal_scanner_counter_trend.py`
+- Use this mode during crashes when BTC bearish + alt RSI < 30. Other modes will be silent (longs blocked by BTC bias, shorts blocked by oversold RSI).
+- **Risk/em pitfall**: In crashes, recent_low can be far below current price. Combined with wide ATR, risk/em can exceed max_risk. Mitigated by tight SL (0.5×ATR) and increased max_risk (3%).
+
+### Helper functions unique to counter-trend
+
+```python
+def bb_pct_b(closes, n=20, k=2):
+    """Position within Bollinger Bands. 0 = at lower, 1 = at upper, <0 = below lower."""
+    bb = bb_width(closes, n, k)
+    if not bb: return None
+    upper, middle, lower, _ = bb
+    width = upper - lower
+    if width == 0: return 0.5
+    return (closes[-1] - lower) / width
+
+def bullish_divergence(closes, lookback=20):
+    """Price makes lower low but RSI makes higher low = bullish divergence."""
+    # Swing-low detection with 2-bar confirmation each side
+    # Returns True if last two swing lows show price_lower_low + rsi_higher_low
+```
+
+### BTC bias gating override
+
+Counter-trend mode has a special BTC bias gate that bypasses the normal `btc_bias_hard` logic:
+
+```python
+if mode_cfg.get("counter_trend_mode"):
+    allowed_long = True      # counter-trend explicitly IGNORES BTC direction
+    allowed_short = False     # counter-trend is LONG-only
+elif mode_cfg["btc_bias_hard"]:
+    # ... normal medium/safe gating
+else:
+    # ... normal aggressive gating
+```
+
+### Implementation notes
+
+- Run the same `automatic_signal_scanner.py` with different `--mode` flags rather than maintaining three forks. Mode-specific configuration lives in a single `MODES = {...}` dict.
+- Journal row id prefix carries the mode: `AS-AGG-...`, `AS-MED-...`, `AS-SAF-...`. The `risk_model` field is set from the mode flag, so monitor / daily report can group results per mode.
+- Cooldowns are per-mode but shared in one journal: a symbol that emitted on Aggressive can still emit on Medium/Safe later because the risk profile and entry are different. This is intentional.
+- Output format: every signal uses the 7-layer screening template (see main SKILL.md → "7-Layer Screening Signal Template"). Header gets a mode badge (⚡/🔹/🛡️/🔄) plus the 7-layer report with pass/fail icons.
+
+### Critical bug fix: `mode` variable scope in setup_for() (2026-06-05)
+
+When adding counter-trend mode, a latent bug was discovered: `apply_enhancements(mode=mode)` at line ~819 of `setup_for()` referenced a bare `mode` variable that only exists as a local in `main()`. Since `setup_for()` is a module-level function, it cannot access `main()`'s locals — this caused a `NameError`. The error was **silently swallowed** by the `try/except Exception: continue` in the scan loop's inner iteration, making signals that passed ALL checks vanish without any error output.
+
+This bug affected ALL modes (aggressive, medium, safe) but was invisible because:
+1. No signals were generated during the 3-day BTC crash period
+2. The error only manifests when a signal actually reaches the enhancements block
+
+**Fix:** Replace `mode=mode` with `mode=mode_cfg.get("label", "unknown").lower().replace("-", "_")`. This derives the mode name from the config dict (which IS a function parameter) instead of relying on an out-of-scope variable.
+
+**Lesson:** When `setup_for()` or any module-level function needs data from `main()`, pass it as a parameter or derive it from existing parameters. Never rely on `main()` locals being accessible. The `try/except Exception: continue` pattern in the scan loop makes this class of bug especially dangerous — it converts hard errors into silent signal loss.
 
 Do not remove risk controls entirely: aggressive means more permissive screening, not random signals.
 
+## Crypto-only universe filter via exchangeInfo
+
+Binance lists tokenized stocks/ETFs/commodities as USDT perpetuals. They are tagged in `/fapi/v1/exchangeInfo` with:
+
+- `contractType = "TRADIFI_PERPETUAL"` (vs `"PERPETUAL"` for crypto)
+- `underlyingType = "EQUITY" | "COMMODITY" | "INDEX"` (vs `"COIN"` for crypto)
+- `underlyingSubType` containing `"TradFi"` or `"Index"`
+
+The exchangeInfo filter is the **primary** crypto-only gate; `EXCLUDE_SYMBOLS` is just defense-in-depth for edge cases:
+
+```python
+info = get_json("/fapi/v1/exchangeInfo")
+meta = {s["symbol"]: s for s in info.get("symbols", []) if s.get("status") == "TRADING"}
+
+def is_crypto(sym):
+    m = meta.get(sym)
+    if not m:
+        return sym not in EXCLUDE_SYMBOLS  # fallback when metadata missing
+    if m.get("contractType") not in {"PERPETUAL"}: return False
+    if m.get("underlyingType") not in {"COIN"}: return False
+    subs = set(m.get("underlyingSubType") or [])
+    if subs & {"TradFi", "Index"}: return False
+    return True
+```
+
+Apply this in BOTH the scanner and any other Binance-perp-touching cron (large prints, volume breakout, market cap move). When a new tokenized stock pair appears (e.g. SNDK, CRCL, CL appeared 2026-05), the exchangeInfo filter catches it automatically — no code change needed.
+
 ## Scanner pitfalls
+
+### btc_bias_hard flag is misleading (aggressive vs medium/safe)
+
+The aggressive mode config has `btc_bias_hard: False` with comment "block only if extreme opposite", but the actual code has IDENTICAL bias gating in both branches — `allowed_long = btc_bias != "bearish"` and `allowed_short = btc_bias != "bullish"`. The `btc_bias_hard` flag ONLY adds behavior for Safe mode (which has `use_multi_tf_align=True`), where it gates on both 1H AND daily bias. For aggressive and medium, longs are always blocked when BTC is bearish regardless of the flag. Do not tell the user "aggressive has softer BTC bias gating" — it does not.
+
+This means prolonged silence when BTC is bearish + alts are bullish is expected: longs blocked by BTC bias, shorts fail because alts are trending up. See `references/scanner-silence-diagnostics.md` for the full diagnostic workflow.
 
 ### Late short after extended dump (PUMP-style)
 
@@ -175,20 +287,28 @@ Generate via `(now + timedelta(hours=7)).strftime("%d %B %Y")` for the header an
 
 ### Required fields, no entry/SL/TP detail
 
-The user explicitly does not want entry, SL, or TP levels in the daily report. Only RR + percentage per row. The summary section must include:
+The user explicitly does not want entry, SL, or TP levels in the daily report. Only RR + percentage per row.
 
+**2026-05-28: Paper sections removed.** The daily report now shows ONLY real Binance perp execution data. The old "Paper Signal Result", "Paper Closed", "Paper Open Sekarang" sections are eliminated. The script reads from `automatic_signal_real_journal.json` and only displays rows where `executor.status` is active/closed.
+
+Stale entries in `automatic_signal_journal.json` with `executor.status in (None, 'NONE')` must be invalidated before the daily report runs — otherwise they create phantom "open" positions that were never actually submitted to Binance. Bulk invalidation pattern:
+
+```python
+for r in data:
+    if r.get("status") in {"ACTIVE", "TP1_HIT", "TP2_HIT", "WAITING_ENTRY"}:
+        exec_info = r.get("executor", {})
+        if not exec_info or exec_info.get("status") in (None, "NONE"):
+            r["status"] = "INVALID"
+            r["invalidated_reason"] = "no_executor_never_filled"
+            r["closed_at"] = now_iso()
+```
+
+The summary section must include:
 - Closed sejak reset: count, win count, loss count
 - Open/active sekarang + waiting entry count
 - Winrate (closed valid)
 - Net RR closed | Avg RR
-- **Performa Persentase Gabungan** block:
-  - Win total: sum of all positive PnL%
-  - Loss total: sum of all negative PnL% (signed, so it shows as negative)
-  - Net (Win - Loss): the algebraic sum
-  - Open est total: sum of unrealized PnL% on currently active positions
-  - **Combined total**: closed total + open total
-
-The "Net (Win - Loss)" row was a deliberate user request to make total dump magnitude visible alongside total win magnitude. Don't collapse them into a single line.
+- **Performa Persentase Gabungan** block (MANDATORY — see Daily Report Format in main SKILL.md)
 
 ### "Trade Hari Ini (ringkas)" section
 
@@ -258,12 +378,45 @@ sl = float(r.get("sl"))  # NOT r.get("sl_current") or r.get("sl")
 
 For robust high-frequency signals, prefer `no_agent=true` script cron jobs that deliver directly to the mapped Telegram topic:
 
-- Scanner schedule: `*/15 * * * *`
-- Monitor schedule: `*/5 * * * *`
+- Scanner (Aggressive): `*/15 * * * *`
+- Scanner (Medium): `5,35 * * * *` — offset from `*/15` so they don't co-fire
+- Scanner (Safe): `10 */2 * * *` — every 2h, multi-TF heavy
+- Monitor: `*/5 * * * *`
 - Daily report: `0 7 * * *`
 - Delivery target format: `telegram:<chat_id>:<thread_id>`
 
 This is more stable and lower-noise than a prompt-only agent job for every scan.
+
+### Pitfall: Binance HTTP 418 "I'm a teapot" + empty-cache stuck
+
+Binance Futures returns HTTP 418 with body `{"code":-1003,"msg":"Way too many requests; IP(...) banned until <unix_ms>"}` when a single IP exceeds the request weight budget. Triggers seen in this environment:
+
+- Hitting `/fapi/v1/ticker/24hr` (heavy ~40 weight) every minute on top of bursts of aggTrade calls
+- ThreadPool with 14+ workers fanning out across 200+ symbols simultaneously
+- Multiple cron jobs polling Binance Futures within the same minute (large_prints + automatic_signal scanners + volume breakout)
+
+Mitigations to apply in any Binance-touching script:
+
+1. `http_json` retry with backoff on 418/429 — respect `Retry-After` header, cap at 30s.
+2. Keep `HTTP_WORKERS` ≤ 6, `MAX_SYMBOLS` ≤ 100 per market per cron tick.
+3. Cache `/exchangeInfo` and `/ticker/24hr` results for 30 minutes; do not refetch every tick.
+4. Stagger cron schedules across the minute (`*/15`, `5,35`, `10 */2`) so different jobs don't co-fire on the same Binance IP within the same second.
+
+**Empty-cache stuck pattern (large_prints v1 bug, 2026-05-15):** if the symbol-list fetch fails during a ban, an empty list `[]` got stored into the cache. The next tick's stale-check looked at the timestamp (still fresh), saw "not stale", and reused the empty list — silently scanning zero symbols indefinitely. Fix: treat empty rows as stale, and on refetch, fall back to the previous good cache instead of overwriting with empty:
+
+```python
+has_empty = any(len(rows) == 0 for rows, _ in cached.values())
+stale = (not cached or has_empty or any(now - r[1] > REFRESH for r in cached.values()))
+if stale:
+    out = {m: fetch_top_symbols(m) for m in markets}
+    for market, rows in out.items():
+        if not rows and market in cached and cached[market][0]:
+            out[market] = cached[market][0]   # keep previous good cache
+            continue
+        upsert_cache(market, rows)
+```
+
+After resolving any 418, verify recovery by hitting a single small endpoint like `/fapi/v1/ticker/price?symbol=BTCUSDT` (HTTP 200 + JSON body) before re-running the full scan.
 
 ## Post-SL learning protocol
 
