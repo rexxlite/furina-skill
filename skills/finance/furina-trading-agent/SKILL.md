@@ -1202,7 +1202,7 @@ every minute), and the historical testnet→live cutover checklist. Current
 standing rule supersedes old staging notes: live Binance perpetual only;
 testnet/demo auto-trading remains disabled.
 
-See `references/executor-venue-and-fill-truth.md` for the ORDIUSDT 2026-05-19 lesson: when a user checks Binance account activity, verify real vs testnet venue across notification job, journal, and API before answering; testnet alerts must be labeled `[TESTNET]`, real alerts `[REAL]`, and executor-backed HIT ENTRY must follow exchange fill confirmation rather than mark-touch alone.
+See `references/executor-venue-and-fill-truth.md` for the ORDIUSDT 2026-05-19 lesson: verify real vs testnet venue (notification job, journal, API) before answering; label testnet `[TESTNET]`, real `[REAL]`; executor HIT ENTRY follows exchange fill confirmation, not mark-touch. SL-streak "kenapa entryan SL semua?" → `references/trade-pnl-diagnosis.md` §6 (side-distribution + BTC trend first).
 
 ## Automated Signal Rooms
 

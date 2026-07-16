@@ -743,6 +743,22 @@ scanning."
 - Cushion: `RISK_CUSHION = 0.93` (7% slippage+fee buffer)
 - Leverage: varies by bucket (see binance-futures-execution skill)
 
+### 6a. Daily Profit Target Hard Stop (2026-06-29)
+
+The risk manager also pauses new entries when **realized PnL for the day**
+reaches `DAILY_PROFIT_TARGET = $10`. This prevents the "morning profit →
+afternoon give-back" pattern where Furina earns +$10 in Asia session and
+bleeds it back in London/US.
+
+Mechanism: reuses the same `PAUSE_FILE` — it's a new REASON to set the flag,
+not a separate system. The executor's PAUSE gate reads the risk state to
+distinguish `skip_reason: "profit_target_hit"` vs `"risk_paused"` for audit.
+
+Key properties: hard stop (not throttle), realized-only (not equity/uPnL),
+no flip-flop (once paused stays paused), auto-reset at UTC midnight.
+
+Full design, code, and tuning guide: `references/daily-profit-target.md`
+
 ---
 
 ## 6b. Manual Chat Entry Workflow (SOP v2 — 2026-06-12)

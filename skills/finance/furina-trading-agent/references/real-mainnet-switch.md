@@ -7,6 +7,28 @@ between testnet and mainnet are `BASE_URL` + API key/secret in
 reconciler/scanners trade real money. So the switch is mostly about *safety
 sequencing*, not code changes.
 
+**The switch is BIDIRECTIONAL** — the exact same procedure runs real→testnet
+(2026-07-06) as testnet→real (2026-06-26). Only the target BASE_URL + key differ.
+Testnet BASE_URL = `https://testnet.binancefuture.com`, mainnet =
+`https://fapi.binance.com`. Testnet wallet is a fixed faucet amount (e.g. 5000
+USDT) which `EQUITY_CAP` still caps down to the configured nominal ($300).
+
+**Env var names (verify, don't assume):** `binance_real_client.py` (ENV_PATH
+`/root/.hermes/secrets/binance_real.env`, ~L38, L64-66) reads
+`BINANCE_REAL_API_KEY`, `BINANCE_REAL_API_SECRET`, `BINANCE_REAL_BASE_URL` — note
+the `_REAL_` infix. Do NOT write `BINANCE_API_KEY`/`BINANCE_BASE_URL` (a plain
+`printf` template with the wrong names produces a file the client can't read).
+Grep `binance_real_client.py` for `env[` / `env.get(` to confirm the exact keys
+before writing the env.
+
+**Before cutting the OLD key loose, check for orphaned positions.** Probe the
+still-active account for open positions FIRST. In the 2026-07-06 switch the old
+real key was already invalid (HTTP 401 -2015) so nothing could be orphaned, and
+the Furina journal showed zero active records — but confirm both (live
+positionRisk if the key still works, AND journal ACTIVE/WAITING_ENTRY/PENDING/
+SUBMITTED/PARTIAL scan) before proceeding. Any live position you can't close
+because the key died stays stranded on that account.
+
 ## Golden rule: KILL flag FIRST, confirm LAST
 
 The user (operator) gates real-money go-live on diligence, not eagerness. Never
@@ -23,11 +45,21 @@ Ordered sequence (do NOT reorder):
    terminal using shell variables instead:
    ```bash
    K='...'; S='...'
-   printf 'BINANCE_API_KEY=%s\nBINANCE_API_SECRET=%s\nBINANCE_BASE_URL=https://fapi.binance.com\nPAPER_MODE=False\n' "$K" "$S" > /root/.hermes/secrets/binance_real.env
+   printf 'BINANCE_REAL_API_KEY=%s\nBINANCE_REAL_API_SECRET=%s\nBINANCE_REAL_BASE_URL=https://fapi.binance.com\nPAPER_MODE=False\n' "$K" "$S" > /root/.hermes/secrets/binance_real.env
    chmod 600 /root/.hermes/secrets/binance_real.env
    ```
-   Verify with `awk '{print length}'` that key+secret are both len=64. Mainnet
-   BASE_URL = `https://fapi.binance.com` (testnet = `https://testnet.binancefuture.com`).
+   **CRITICAL — exact var names.** `binance_real_client.py` (~L64-66) reads
+   `BINANCE_REAL_API_KEY`, `BINANCE_REAL_API_SECRET`, `BINANCE_REAL_BASE_URL` —
+   all with the `_REAL_` infix. Do NOT write the unprefixed `BINANCE_API_KEY` /
+   `BINANCE_BASE_URL` forms; the client raises `KeyError` on load and nothing
+   trades. Mainnet BASE_URL = `https://fapi.binance.com`, testnet =
+   `https://testnet.binancefuture.com`.
+   **Pitfall — output masking hides len verification.** The terminal masks lines
+   containing `API_KEY`/`API_SECRET`, so `awk '{print length}'` prints `*** chars>`
+   instead of the number. Verify lengths with a Python one-liner that parses the
+   env into a dict and prints only `len(...)` + a head/tail slice (e.g.
+   `key[:6]+'...'+key[-4:]`) — never the raw value. Both key and secret must be
+   len=64.
 4. Verify the key works AND inspect the account BEFORE releasing the flag. Write a
    throwaway probe (e.g. /tmp/verify_real_key.py) that prints BASE_URL, available
    USDT balance, and **all open positions**. Confirm: (a) balance reads, (b) no
@@ -107,6 +139,63 @@ Old code tolerated only `-4048`. Fix (binance_real_executor.py ~L525-533):
   computed from the SL distance, not from leverage.
 - Add automatic leverage step-down `20→10→8→5→3→2→1` to handle "Leverage X not
   valid" (symbol's max leverage is below the configured value).
+
+## Reverse switch: Real Mainnet → Demo/Testnet
+
+Same mechanics, opposite direction (done 2026-07-06). Only `BINANCE_REAL_BASE_URL`
++ key/secret change. Sequence mirrors the go-live but the final confirmation is
+still gated the same way (KILL flag first, `rm` only after explicit "ya, lepas
+flag").
+1. `touch /root/.hermes/EXEC_KILL_REAL` first.
+2. Backup the current real env: `cp binance_real.env binance_real.env.bak.real.<ts>`.
+3. **Check for orphaned real positions BEFORE cutting the connection.** Probe the
+   real account for open positions — if any exist they'll be left hanging on
+   mainnet once you switch BASE_URL. Note: the outgoing real key is often already
+   revoked by the user (probe returns `HTTP 401 code=-2015 Invalid API-key`),
+   which conveniently means nothing can be orphaned — but confirm via the Furina
+   journal too (`status in {ACTIVE,WAITING_ENTRY,PENDING,SUBMITTED,PARTIAL}`).
+   Empty journal + dead key = clean to switch.
+4. Write testnet env with `BINANCE_REAL_BASE_URL=https://testnet.binancefuture.com`
+   and the testnet key/secret (same `_REAL_` var names).
+5. Verify the testnet key live: reload the client, read USDT wallet + open
+   positions. A fresh testnet account reads ~5000 USDT faucet balance.
+6. **EQUITY_CAP still governs sizing even when the wallet is huge.** Executor uses
+   `min(available_balance, EQUITY_CAP)`, so a 5000-USDT testnet wallet with
+   `EQUITY_CAP=300.0` still sizes every trade off $300 — "modal $300, risk sama
+   seperti sebelumnya" needs NO config edit if EQUITY_CAP/RISK_PCT are already at
+   the $300 values. Verify the config block, don't blindly re-write it.
+7. Archive the mainnet journals → `*.mainnet_archive_<ts>.json`, reset live
+   journals to `[]`, and reset `real_risk_state.json` → `{}` so the daily
+   profit-target / loss-limit counter starts clean on the new venue.
+8. Ask final confirmation, then `rm EXEC_KILL_REAL`. On testnet the LLM entry gate
+   is optional — offer SHADOW (log-only, more signals flow for data collection)
+   vs ENFORCE.
+
+## Testnet listing mismatch: scan mainnet, execute testnet (`symbol_not_on_futures`)
+
+On testnet, scanners still `build_universe()` from **mainnet** data
+(`https://fapi.binance.com` is hardcoded in each scanner's `BASE`), but the
+executor trades on **testnet** (`BINANCE_REAL_BASE_URL`). Testnet lists fewer
+perps (~570) than mainnet, so any signal on a mainnet-only symbol dies at the
+executor with `skip_reason = symbol_not_on_futures`. Observed 2026-07-06: REUSDT
+LONG (FUNDING, score 5) fired but skipped — REUSDT exists on mainnet, not on
+testnet. This is NOT a liquidity/gate rejection and NOT a bug; it's a venue
+listing gap. When the user asks "belum ada signal?" on testnet, check
+`executor.skip_reason` — `symbol_not_on_futures` means the symbol isn't listed on
+the execution venue, distinct from `manual_position_held`, `llm_veto`,
+`asia_session_score_too_low`, or a thin-book depth reject.
+
+Two ways to handle (user's choice; recommend option 2 for representative testnet
+results):
+1. Leave as-is — accept that some good signals hang because testnet doesn't list
+   the symbol. Simplest, realistic for paper testing.
+2. Filter `build_universe()` to intersect with the testnet perp list (one extra
+   `exchangeInfo` call against `BINANCE_REAL_BASE_URL` per scan) so scanners only
+   emit executable signals.
+
+To enumerate testnet perps: GET
+`https://testnet.binancefuture.com/fapi/v1/exchangeInfo`, keep
+`status=='TRADING' and contractType=='PERPETUAL'`.
 
 ## Journal hygiene on switch
 
